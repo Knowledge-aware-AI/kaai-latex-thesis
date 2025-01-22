@@ -1,0 +1,810 @@
+
+
+
+
+
+\chapter{Introduction}
+
+
+
+\begin{table}[t]
+    \centering
+    \small
+    \begin{NiceTabular}{p{0.44\columnwidth}|p{0.48\columnwidth}}
+    \toprule
+    \textbf{Existing LLM analyses} & \textbf{Our proposal} \\
+    \midrule
+    \textcolor{red}{\ding{55}} \textbf{\textit{Prompt-and-discard:}}\newline
+     - Transient single-focus explorations (e.g., factuality OR bias OR cutoff) & 
+        \textcolor{green}{\checkmark} \textbf{\textit{Persistent resource:}} \newline
+     - Materialized KB reusable for a wide array of questions
+    \\[13pt]
+        \textcolor{red}{\ding{55}} \textbf{\textit{Sample availability bias:}} \newline
+     - Insights bound to experimenter’s predisposition
+         & 
+        \textcolor{green}{\checkmark} \textbf{\textit{Recursive materialization:}} \newline 
+     - Discover unconceived LLM knowledge/beliefs \\[4pt]
+    
+     \textcolor{red}{\ding{55}} \textbf{\textit{Scratching the surface: }} \newline
+     - Few 100s-100K samples \newline
+     - Breadth and depth of LLM knowledge untouched
+      &
+     \textcolor{green}{\checkmark} \textbf{\textit{Massive-scale:}} \newline 
+     - Over 100M records \newline - Recursive crawl to unprecedented breadth and depth
+     \\
+     \bottomrule
+    \end{NiceTabular}
+    \caption{Comparison of existing LLM knowledge analysis approaches and our proposal.}
+    \label{tab:motivation}
+\end{table}
+
+
+LLMs have been one of the most exciting recent developments in NLP and AI, and next to their ability to perform a wide set of procedural tasks, a major success factor is the factual knowledge that they have internalized \cite{bubeck2023sparks}. Their potential to store factual knowledge, like \textit{(Nelson Mandela, award, Nobel Peace Prize)}, was first highlighted by \citet{petroni-etal-2019-language}, and this has generated an own (sub-)field of studying all aspects of factual knowledge in LLMs, from trying to locate it, to estimates of their storage potential, to techniques to effectively elicit it \cite{jiang-etal-2020-know,roberts-etal-2020-much,veseli2023evaluating,sun-etal-2024-head,wu2024towards}. A large set of benchmarks and studies transiently investigate the knowledge storage ability via example-based prompting, e.g., to determine, how many triples from common knowledge bases (KBs) or question answering (QA) datasets are known to LLMs. However, all these works are subject to an \textbf{availability bias} \cite{kahnemann}, i.e., they only surface LLM knowledge/beliefs\footnote{The terminology here is contentious, see Section \ref{epistemiology}.} on topics that were known to and pre-designed by the experimenter. They inherently cannot discover knowledge on topics outside of their benchmarks.
+
+\begin{figure}[t]
+ \centering
+  \includegraphics[width=\columnwidth,]{figures/gptkb-pipeline.pdf}
+ \caption{Overview of our approach for factual knowledge materialization from LLMs.
+ }
+ \label{fig:overview}
+ \end{figure}
+
+To enable comprehensive insights into LLM knowledge, we propose to extensively materialize the knowledge of LLMs into a KB (see Table~\ref{tab:motivation}). General-world KBs like Wikidata \cite{wikidata}, Yago \cite{yago} and DBpedia \cite{dbpedia} are important and long-standing backbones for AI applications, yet have seen little innovation in the last years, and have only been constructed manually, or by scraping semistructured web content \cite{machine-knowledge}.
+In particular, we propose to use recursive graph exploration to obtain comprehensive (named-entity-centric) LLM knowledge, and to consolidate it via LLM-based entity disambiguation, class and relation canonicalization, and taxonomy induction (see Fig.~\ref{fig:overview}). This proposal faces several challenges:
+\begin{enumerate}
+    \item \textit{Runtime and cost:} State-of-the-art KBs contain millions of entries, and LLM inference is relatively slow. It is therefore unclear how to perform comprehensive knowledge elicitation under practical monetary and time constraints.
+    \item \textit{Variance, hallucinations, and scoping:} Latent knowledge in LLMs covers a wide set of topics, varies by entity, and includes hallucinations. We need a method that elicits a high quantity, without encouraging hallucinations, and without falling into bottomless corners, e.g., open-ended phrases or translations. 
+    \item \textit{Global inconsistency}: Distinctive prompts risks surfacing outputs that are not globally consistent, e.g., introducing duplicate relations, entities, or disconnected class hierarchies.
+\end{enumerate}
+Our approach builds on the following ideas: To overcome scaling issues, and obtain relevant knowledge, we utilize a commercial API that allows to massively batch requests, and utilize named entity recognition (NER) and carefully crafted prompts to restrict the explored space, along with prompts that encourage varied answer sizes. To obtain a coherent KB, we perform a set of canonicalization and disambiguation steps, entirely relying on the LLM itself. In summary, our salient \textbf{contributions} are:
+\begin{enumerate}
+    \item To the best of our knowledge, we are the first to propose  extensive materialization for analyzing factual LLM knowledge.
+    \item We present a scalable methodology to elicit massive amounts of LLM knowledge, and to consolidate it.
+    \item Using GPT-4o-mini, we construct \ourkb, the first large-scale KB entirely built from an LLM's parametric knowledge, containing 101M assertions for over 2.9M entities. 
+    \item We use \ourkb\ to exemplarily analyze GPT-4o-mini's factual knowledge in terms of scale, accuracy, bias, and cutoff, at the same time.
+\end{enumerate}
+Our work is a significant advancement for two 
+areas:
+For 
+LLM research,
+we introduce a proof-of-concept methodology that, for the first time, enables \textit{constructive} insights into the knowledge (or beliefs) of LLMs.
+For 
+the Semantic Web,
+we provide fresh momentum for the long stale problem of open-domain KB construction. 
+We provide code and a concrete resource, \ourkb, both as a 3.8 GB download, and via an online browsing interface and SPARQL query interface at \website.
+    
+
+
+\chapter{Related work}
+
+\section{Extent of LLM knowledge}
+Since the emergence of LLMs, the question of how much these models know has frequently been raised \cite{petroni-etal-2019-language,roberts-etal-2020-much,jiang-etal-2020-know,veseli2023evaluating,sun-etal-2024-head,wu2024towards}.
+So far, the widely adopted approach is to sample a domain of interest, e.g., question-answer pairs from a common benchmark, or triples from Wikidata, transiently probe the LLM, and compute the fraction that the LLM can correctly answer/complete. 
+This is prone to ``availability bias'' \cite{kahnemann} since we do not get a comprehensive view of the LLM knowledge outside the focus of existing benchmarks.
+For instance, we found that GPT-4o-mini holds substantial knowledge about art periods or hobbies, which are not covered in existing KBs.
+\citet{kassner-etal-2021-beliefbank} propose a small-scale persistent memory component for ensuring LLM answers remain consistent over multiple prompts.
+\citet{mango} iteratively prompt GPT-3.5 for obtaining 167K sentences containing cultural commonsense for 11K subjects. \citet{cohen-etal-2023-crawling} propose to iteratively prompt GPT-3 for relations and relational assertions for triples.
+In difference to \cite{mango}, we are after structured content (triples), at a much larger scale. In difference to \cite{cohen-etal-2023-crawling}, we unveil the practical challenges that such a graph exploration faces, tackle them, and perform LLM-based KB construction at scale.
+
+\section{Iterative information extraction}
+Iterative information extraction is a long-standing idea, already prototyped by Google cofounder Sergey Brin via the DIPRE system \cite{brin1998extracting}. The Snowball system by \citet{agichtein2000snowball} presented a large-scale implementation of this idea, harvesting tuples from over 300,000 newspaper documents. The KnowItAll system \cite{etzioni2004web} followed a similar approach, and led to the ReVerb KB \cite{reverb}. Despite a proposal by \cite{cohen-etal-2023-crawling}, to date, we are not aware of any attempts to extract knowledge from LLMs at scale.
+
+
+
+\begin{table}[t]
+\small
+\begin{center}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{KB} & \textbf{\#entities} & \textbf{\#assertions} \\ \midrule
+\textit{Wikimedia-related} \\
+Wikidata & 113M & 1.62B \\
+Wikidata5m & 5M & 20M \\
+Yago 4.5 & 50M & 140M  \\
+DBpedia & 3.8M & 75M \\ 
+\midrule
+\textit{Text-extracted} \\
+NELL & ? & 12M \\
+ReVerb & ? & 15M \\ 
+\midrule
+\textit{Generative} \\
+\ourkb & 2.9M & 101M  \\ \bottomrule
+\end{tabular}
+\end{center}
+\caption{Size comparison of major KBs. 
+See Appendix~\ref{app:source-kb-sizes} for sources.
+% The ones in the top block are Wikimedia-related, NELL and ReVerb are text-extracted.
+}
+\label{tab:KB-sizes}
+\end{table}
+
+\section{Large-scale KB construction}
+Dominating public large-scale KBs are Wikidata \cite{wikidata}, Yago \cite{yago} and DBpedia \cite{dbpedia}, all started more than 10 years ago. While Wikidata is constructed by volunteers, Yago and DBpedia represent the paradigm of (semi-)structured information harvesting and integration, extracting in particular from Wikipedia infoboxes and Wikidata \cite{machine-knowledge}. They all remain incomplete \cite{razniewski2024completeness}, warranting the search for novel paradigms. Commercial projects like the Google KG \cite{singhal2012knowledgegraph} or Amazon's KG \cite{dong2020autoknow} have usually followed these approaches. By comparison, text-based KB construction, e.g., in NELL \cite{nell} or ReVerb \cite{reverb}, has achieved less adoption. Our approach is more related to the latter approaches, as LLMs are distillations of large text corpora. Table~\ref{tab:KB-sizes} gives an overview of major KB projects.
+
+
+
+
+
+
+\chapter{Methodology}
+
+An overview of our approach is shown in Figure~\ref{fig:overview}. In the first phase, \textbf{knowledge elicitation}, we iteratively elicit LLM triples for a given subject, and enqueue newly encountered named entities for further triple elicitation. In the second phase, \textbf{knowledge consolidation}, we consolidate the resulting triple set by canonicalizing entities, relations and classes, and by constructing a coherent taxonomy. 
+Our paradigm refrains from imposing any standardized vocabularies, or using existing KBs as disambiguation references to effectively materialize the parameterized LLM knowledge.
+
+\section{Knowledge elicitation}
+
+\subsection{Iterative graph expansion}
+The process starts from one or a set of seed subjects, e.g., \textit{Vannevar Bush}, the visionary behind the concept of hyperlink-based knowledge organization \cite{bush1945we}. From the objects in the triples obtained for him, we can then identify further entities (e.g., \textit{MIT} (affiliation) or \textit{Everett, MA} (birth place)), for which we can then elicit further knowledge, and so on \cite{brin1998extracting}. Figure \ref{fig:graph_explore} illustrates how in 3 hops, we arrive at entities of diverse types, such as \textit{historical event} (Boston Tea Party, Manhattan Project), \textit{newspaper} (The Times), and \textit{magazine} (The New Republic).
+
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/graph-explore-2.pdf}
+    \caption{Graph exploration from the seed entity \textit{Vannevar Bush}.}
+    \label{fig:graph_explore}
+\end{figure}
+
+
+
+\subsection{Knowledge elicitation}
+A major challenge is to elicit as much knowledge as possible, but at the same time, not encourage hallucinations. We found that without guidelines on the expected number of triples, LLMs showed too little variance in the number of triples per subject, while we would expect them to return many more triples for \textit{Einstein} than for other entities. We solve this via indications that are defined in relation to the entity's popularity. In difference to the proposal \cite{cohen-etal-2023-crawling}, we also drop the separate relation elicitation, and relation-specific knowledge extraction, as these do not scale. To structure the knowledge, we also request that at least one \textit{instanceOf} triple should be returned. Output parsing is eased by using the structured outputs feature of OpenAI's API. In turn, this also reduces hallucinations, e.g., additional qualifiers, textual descriptions, or similar. The full prompt is in Figure~\ref{fig:full-prompt} in the Appendix.
+
+
+
+
+\subsection{Named-entity recognition (NER)}
+Our early attempts at graph exploration were plagued by topical runaway into linguistic knowledge, translations, etc., because LLM-generated objects cover a wide range of imprecisely delineated data types. We experimented with various ways to filter non-named entities from the expansion, but found that existing NER frameworks struggled with the context-free entity labels available from our crawl process (most NER models are trained on sentences). In the end, we used the LLM itself to identify named entities, processing multiple candidates at once. The full prompt is presented in Figure~\ref{fig:prompt-ner} in the Appendix.
+
+
+
+\section{Knowledge consolidation}
+
+The knowledge elicitation phase 
+returns
+a huge degree of redundancy and variance.
+Feeding a large amount of existing entities or taxonomy into the knowledge elicitation prompt could mitigate this problem.
+However, that would also increase costs significantly, and even be infeasible once we have generated millions of entities and triples.
+Instead, we introduce several steps to consolidate LLMs output post-hoc.
+
+
+\subsection{Relation clustering}
+The elicitation phase
+generates
+788K
+distinct relation names, with many obvious duplicates, e.g., \textit{instanceOf}, \textit{isA}, or \textit{InstanceOf}. 
+We apply a greedy clustering algorithm to this set (see Algorithm~\ref{alg:relation-clustering}).
+This process merges relation $r$ into a more frequent relation $s$, selected as the one with the highest textual embedding similarity to $r$ among all relations more frequent than $r$, if the similarity is greater than an adaptive threshold (defined in line 6 in Algorithm~\ref{alg:relation-clustering}).
+% In particular, the 
+This
+% formula is designed so that the similarity 
+threshold varies with the frequency of the relation, leading to a more aggressive removal of relations 
+% that occur 
+with low frequency. 
+% This way, we reduce the number of relations to 2,133 (a 323x reduction).
+
+\vspace{-0.1cm}
+\begin{algorithm}[ht]
+\small
+\caption{Relation clustering}\label{alg:relation-clustering}
+\begin{algorithmic}[1]
+\Require A set of relations $\mathcal{R}$, hyperparameter $\alpha$
+\Ensure A map from relation to cluster-id $\mathcal{C}$
+\State $\mathcal{R} \gets \text{sort}(\mathcal{R}, \text{key} = \text{frequency}, \text{reverse} = \text{True})$ 
+\State $\mathcal{C} \gets \{\}$
+\State $\textit{next\_cluster\_id} \gets 0$
+% \State $\mathcal{C}[\textit{first}(\mathcal{R})] \gets next\_cluster\_id$ % Phong: this line is unnecessary
+\For{$r \in \mathcal{R}$}
+    % \State $merged \gets \text{False}$
+    
+    % \State $max\_sim \gets \max([\text{sim}(r, s) \textbf{ for } s \in \mathcal{R} \textbf{ upto } r])$
+    \State $s' = \text{argmax}([\text{similarity}(r, s) \textbf{ for } s \in \mathcal{R} \textbf{ upto } r])$
+    \State $\textit{threshold} \gets \alpha \times \frac{\log(\text{frequency}(r))}{\log(\text{frequency}(\text{first}(\mathcal{R})))}$
+
+    \If{$\text{similarity}(r, s') > \textit{threshold}$}
+        % \State $s_{max} = \text{argmax}([\text{sim}(r, s) \textbf{ for } s \in \mathcal{R} \textbf{ upto } r])$
+        \State $\mathcal{C}[r] \gets \mathcal{C}[s']$
+        % \State $merged \gets \text{True}$
+        % \State \textbf{break}
+    \Else
+        \State $\mathcal{C}[r] \gets \textit{next\_cluster\_id}$ 
+        \State $\textit{next\_cluster\_id} \gets \textit{next\_cluster\_id} + 1$
+    \EndIf
+\EndFor
+\State \Return $\mathcal{C}$
+\end{algorithmic}
+\end{algorithm}
+\vspace{-0.1cm}
+
+
+\subsection{Class clustering}
+Similarly to relations, there are 103K distinct class names
+(i.e., objects for \textit{instanceOf} relations) 
+% were 
+generated by the knowledge elicitation phase, 
+with both obvious duplicates, and many overly specific cases. 
+Algorithm~\ref{alg:relation-clustering} is also applied to clean this set.
+
+In our experiment, both relation and class clustering uses SentenceTransformers \cite{reimers-2019-sentence-bert} for embedding cosine similarity computation, with $\alpha = 1.2$ chosen via manual inspection of small held-out sets.
+
+\subsection{Taxonomy construction}
+The classes 
+in the KB
+so far 
+do not form 
+a 
+coherent, or even 
+connected taxonomy, 
+as the knowledge elicitation process only expands named entities. 
+We propose Algorithm~\ref{alg:taxonomy-construction}, which is based on the LLM itself, to build a complete taxonomy from these individual classes.
+
+\begin{algorithm}[ht]
+\small
+\caption{Taxonomy construction}\label{alg:taxonomy-construction}
+\begin{algorithmic}[1]
+\Require Knowledge base (KB)
+\Ensure Taxonomy
+\Function{construct\_taxonomy}{KB}
+    \State \textit{taxonomy} $\gets$ LLM\_get\_high\_level\_taxonomy()
+    \For{\textit{class} $\in$ KB.classes} 
+        \State \textit{class}.generality\_score $\gets$ LLM\_get\_score(\textit{class})
+    \EndFor
+    \State \textit{classes} $\gets$ sort(KB.classes, key=generality\_score)
+    \For{\textit{class} $\in$ classes} 
+        \State insert\_class\_recursive(\textit{taxonomy}.root, \textit{class})
+    \EndFor
+    \State \Return \textit{taxonomy}
+\EndFunction
+\Statex
+\Function{insert\_class\_recursive}{\textit{node}, \textit{class}}
+    \If{has\_children(\textit{node})}
+        \State \textit{next} $\gets$ LLM\_superclass(\textit{class}, \textit{node}.children)
+        \If{\textit{next} \textbf{is not} $\textsc{null}$}
+            \State insert\_class\_recursive(\textit{next}, \textit{class})
+        \Else
+            \State LLM\_update\_taxonomy(\textit{node}, \textit{class})
+        \EndIf
+    \Else
+        \State LLM\_update\_taxonomy(\textit{node}, \textit{class})
+    \EndIf
+\EndFunction
+\end{algorithmic}
+\end{algorithm}
+
+The construction starts by generating a high-level taxonomy via the LLM.
+Then, for each of the existing classes in the KB (sorted by generality scores given by the LLM), we find the lowest node of which the given class is identified as a subclass, via depth-first search (see function \textsc{insert\_class\_recursive} in Algorithm~\ref{alg:taxonomy-construction}).
+Then, we ask the LLM to update the sub-taxonomy starting from the found node with the given class.
+In this step, the LLM may generate new intermediate classes on the path from the found node to the given class.
+
+The prompts used for seed taxonomy generation, generality scoring, superclass identification, and taxonomy update are provided in Figure~\ref{fig:taxonomy} in Appendix \ref{app:prompts}.
+Further LLM-based refinement in the style of \cite{peng2024refining} could be considered.
+
+
+
+
+\subsection{Entity deduplication}
+
+Naive graph exploration frequently yields duplicates, 
+% for instance, 
+such as
+\textit{John F. Kennedy} and \textit{John Fitzgerald Kennedy}. To remove these duplicates without requiring extraordinary runtime, we follow the standard blocking-based deduplication approach by \citet{kopcke2010frameworks}. 
+This 
+% technique 
+approach
+is 
+% usually 
+based on choosing a blocking key,
+% : one 
+which is an
+attribute by whose values we obtain meaningful partitions on entities. 
+% The key should meet two criteria: on the one hand, it should be a necessary condition for equivalence; on the other hand, it should be distinctive enough to partition the entities into not too large blocks. 
+
+We focus on entities that are instances of the most interesting class, \textit{humans}. We choose to block entities by birth dates.
+% \footnote{Only considering those with a birth date at a resolution more specific than a year.}
+Within each block, we consider an entity pair as duplicates if 
+% both 
+(i) their labels 
+% exhibit at least 0.85 similarity using SentenceTransformers, 
+have close meanings (i.e., cosine similarity between SentenceTransformers embeddings are greater than 0.85),
+and 
+(ii) 30\% of their triples are exactly the same. 
+% We then merge these entities, keeping the name of the entity that was created first. 
+% In total, this step removes 6,987 duplicate instances of \textit{Person}. 
+More advanced methods could utilize LLMs themselves for deciding on entity equivalence \cite{ding2024entgpt}, but it would incur more cost and longer runtime.
+
+
+
+\chapter{Implementation}
+\label{sec:implementation}
+
+\section{LLM choice and parallelization}
+We chose \textit{GPT-4o-mini} \cite{openai2024gpt4technicalreport} for our experiments, because of (i) its ability to process requests in batches, (ii) its structured output feature, (iii) its good tradeoff between performance and cost. The batch feature is particularly important, enabling us to send, after startup, up to 100 batches of 10,000 entities in parallel. The model's size is not publicly released, but has been estimated to be around 8B \cite{gptparameters1,gptparameters2}.
+% \footnote{See \url{https://explodingtopics.com/blog/gpt-parameters}, which in turn links to \url{https://techcrunch.com/2024/07/18/openai-unveils-gpt-4o-mini-a-small-ai-model-powering-chatgpt}, which references a statement by OpenAI that we could not find. But the underlying reasoning based on performance comparison with open models appears sensible.}
+
+\section{Seed entity, result size, runtime and cost} We start the process from a single entity, \textit{Vannevar Bush}, in honor of his vision of interlinked knowledge \cite{bush1945we}. 
+Note that this choice is arbitrary and overall inconsequential.
+As general-world knowledge graphs are densely connected \cite{hogan2021knowledge}, any seed entity connected to popular entities serves as well.
+% \footnote{E.g., 
+For instance, we reach \textit{MIT} in one hop, \textit{Alan Turing} in 2 hops, \textit{Kyoto} in 3 hops.
+% }
+
+We require a total of 2,200 batches to prompt the LLM up to BFS-depth 10, which corresponded to 5.8M prompted entities, of which for 2.9M a non-empty answer was returned. The whole process took 27 hours, and including trial runs, constructing \ourkb\ cost us a total of \$3,500 for 
+% OpenAI 
+API calls.
+
+\section{\ourkb{} statistics}
+Our KB contains a total of 101M triples for 2.9M entities, organized into 1,804 relations and 473 classes. This gives an average of 36 triples per subject, with two distinct clusters, in particular, 651K entities with 10 triples and 86K with 50 triples, with most others near these values. Of all triples, more than 37M have an entity as object, and more than 67M have a literal as an object. The average length of entity labels is 24.5 characters. Example output for \textit{Vannevar Bush} is shown in 
+% Table~\ref{tab:vannevar}, 
+Figure~\ref{fig:graph_explore}.
+% overall s
+Statistics are shown in Table~\ref{tab:statistics}.
+
+\begin{table}[t]
+\centering
+\resizebox{\columnwidth}{!}{%
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Entities} & 2.9M \\
+\textbf{Triples} & 101M \\
+\textbf{Relations} & 1,804 (788K before canonicalization) \\
+\textbf{Classes} & 473 (103K before canonicalization) \\
+\textbf{Triple objects} & 37M entities, 64M literals \\
+\textbf{Avg. triples/entity} & 36 \\
+\textbf{Avg. label length} & 24.5 characters \\
+\textbf{Avg. outlinks} & 4 \\
+\textbf{Subject-precision*} & 74\% Verifiable, 9\% Plausible,\\
+ & 17\% Unverifiable \\
+\textbf{Subjects in Wikidata*} & 37\% in WD, 63\% not in WD \\
+\textbf{Triple-precision*} & 31\% True, 61\% Plausible, \\
+                         & 1\% Implausible, 7\% False \\ 
+\bottomrule
+\multicolumn{2}{l}{\small\textbf{*} \textit{as a weighted average across layers.}}
+\end{tabular}
+}
+\caption{Statistics of \ourkb. }
+\label{tab:statistics}
+\end{table}
+
+%https://nextcloud.mpi-klsb.mpg.de/index.php/s/x5y5ZXWtDWZrYzd
+\section{Dataset provision and license} We provide our KB both as a download (3.8 GB in TTL format), via a web browsing interface, and via a SPARQL query endpoint at \website. We provide our KB under the permissive CC BY-NC 4.0 license, though we caution against unreflected downstream usage (see Section~\ref{sec:limitations}). This license is compatible with the permissive terms of use of OpenAI \cite{openai2022sharingpublicationpolicy}.
+% \footnote{\url{https://openai.com/policies/sharing-publication-policy}}
+
+
+
+
+
+
+
+
+
+\chapter{Analysis}
+\label{sec:discussion}
+
+\section{Precision}
+\label{sec:precision}
+
+Evaluating the precision of large-scale KBs is not straightforward, because they contain a significant amount of long-tail knowledge, for which finding evidence or counter-evidence is difficult. In line with
+% previous work 
+\cite{yago}, we evaluate precision within the context of web-retrievable information. Figure \ref{fig:accuracy} summarizes our findings.
+
+%\subsection{Entities}
+For verifying \textbf{entities}, we retrieved 5 search results from a web search API for the entity label, which are then used to decide whether the entity's existence could be verified, appears plausible, or could not be verified. Deciding on these labels based on textual context represents a task of textual entailment, a.k.a. natural language inference (NLI), a task generally considered solved for LLMs.\footnote{On LLM performance on textual entailment, the popular SNLI \cite{bowman-etal-2015-large} is comparable, which was considered solved in 2020 by BERT architectures \cite{bert-snli} at 92\% accuracy, which is the ceiling, given dataset noise. This is also why the literature mentions no numbers for newer models like Llama on this task anymore.} We therefore use another LLM, Llama-3.1-70B-Instruct~\cite{llama31}, for this task. The LLM hereby only judges textual entailment, it does not independently judge truth from its parameters.
+Based on 1,000 samples, average entity verifiability is 74\%, and as shown in Figure~\ref{fig:accuracy}, we observe a continuous drop of verifiability over the layers, stabilizing at layer 10 at about 70\%. The plot also includes Wikidata-existence, which paints a similar trend at lower levels. We generally observe a wide variance across classes, finding, for instance, that persons consistently have a higher verifiability than fictional character, where many codes were made up (e.g., \textit{Officer K.I.T.T. XV} and \textit{Officer K.I.T.T. XVI}) or varying incorrect type numbers are added to real names  continuously by the LLM (e.g., \textit{Agent 71} and \textit{Agent 72}). 
+%\textcolor{red}{Update this!!!}
+
+\begin{figure}[t]
+    \centering
+    \resizebox{\columnwidth}{!}{%
+    \begin{tikzpicture}
+    \begin{axis}[
+        xlabel={BFS-Layer},
+        ylabel={Percentage (\%)},
+        ymin=0, ymax=100,
+        xmin=1, xmax=10,
+        xtick={1,2,3,4,5,6,7,8,9,10},
+        grid=both,
+        %legend pos=north east,
+        %legend cell align={left},
+        width=10cm, height=6cm,
+        legend style={
+                at={(0.5,-0.3)}, % Position the legend below the plot
+                anchor=north,    % Anchor the top of the legend to the bottom of the plot
+                cells={align=left}, % Align text in legend entries to the left
+                draw=none
+            },
+        legend columns=2,
+    ]
+    % Entities web-verifiable
+    \addplot[
+        very thick,
+        color=gg-red,
+        mark=square*,
+        mark options={scale=0.8}
+    ] coordinates {
+    (1,100) (2,100) (3,93) (4,87) (5,80) (6,78) (7,66) (8,69) (9,71) (10,69)
+};
+    \addlegendentry{Entities web-verifiable}
+
+    % Entities in Wikidata
+    \addplot[
+        very thick,
+        color=gg-orange,
+        mark=*,
+        mark options={scale=0.8}
+    ] coordinates {
+    (1,100) (2,100) (3,76) (4,65) (5,52) (6,42) (7,29) (8,20) (9,26) (10,23)
+};
+    \addlegendentry{Entities in Wikidata}
+    
+    % Triples web-verifiable
+    \addplot[
+        very thick,
+        color=gg-blue,
+        mark=triangle*,
+        mark options={scale=0.8}
+    ] coordinates {
+        (1,62) (2,58) (3,60) (4,61) (5,34) (6,31) (7,30) (8,25) (9,36) (10,27)    };
+    \addlegendentry{Triples web-verifiable}
+    
+    % Triples web-plausible
+    \addplot[
+        very thick,
+        color=gg-teal,
+        mark=diamond*,
+        mark options={scale=0.8}
+    ] coordinates {
+        (1,20) (2,33) (3,32) (4,36) (5,58) (6,63) (7,61) (8,67) (9,56) (10,63)
+    };
+    \addlegendentry{Triples web-plausible}
+    \end{axis}
+    \end{tikzpicture}
+    }
+    \caption{Accuracy of \ourkb\ across layers.}
+    \label{fig:accuracy}
+\end{figure}
+
+%\subsection{Triples}
+For a given \textbf{triple}, we retrieve the top-5 web-page snippets for the search term \textit{<subject> <object>} from a search engine API, then again perform LLM-based textual entailment to decide whether the given triple is entailed (entailed/plausible/implausible/false), given the snippets. We specifically adapt the prompt used by \citet{adam2024traceable}, extending it with the ``false'' level. Based on 1,000 samples, we find that on average, 31\% of triples are entailed, 61\% are plausible, 1\% is implausible, and 7\% are false.
+
+%\subsection{Taxonomy}
+In terms of the accuracy of the \textbf{taxonomy}, we follow the per-edge evaluation scheme proposed by \citet{bordea2016semeval}, finding that 64\% of all subclass-superclass edges are considered correct, using the Llama model as judge. We also evaluate whether a superclass is most appropriate, by offering all siblings as alternatives. Here, for 70\% of all subclass-superclass edges, the superclass is considered the best alternative. Note that the structure of our taxonomy still leaves room for improvement in terms of long-range dependencies and distributions, that are not easy to quantify or address locally.
+
+%To address this, we extract the \textit{<parent-class child-class>} pairs along with their respective \textit{parent alternatives} (peer classes of parent-class). We then use another LLM to assess whether the given pairs are correct and if the \textit{parent-class} is the most appropriate choice among the alternatives. The results show that 64\% of the pairs were verified as correct, 70\% of the parent classes were deemed the most appropriate among the alternatives, and 60\% were both correct and the most appropriate.
+
+
+
+
+\section{\ourkb{} content and comparison}
+\label{sec:content-and-comparison}
+
+\subsection{Classes} The most frequent classes generated for entities are shown in Figure~\ref{fig:frequent_classes}, where we find that \textit{Person} dominates the dataset. Several more classes are actually merged into \textit{Person}, e.g., \textit{human, hominid}. Including these, the total number of \textit{Person} is more than 287K. Further details by layer are in Appendix~\ref{app:layer-classes}. %\sg{\textbf{Sugg:} Keep both overall top-10 (pie) and layerwise top-5 (stacked-bar)}
+% SR: OK, layer-wise currently in appendix
+
+\begin{figure}[t]
+\centering
+\scriptsize
+\begin{tikzpicture}
+    \pie[sum=auto, after number=K, radius=2]{
+    287/Person, 
+    74/film, 
+    74/company, 
+    54/video game, 
+    49/museum, 
+    45/award, 
+    44/album, 
+    38/organization, 
+    35/character, 
+    34/city
+    % 31/song, 
+    % 31/book, 
+    % 30/event, 
+    % 25/art exhibition, 
+    % 22/novel
+    }
+\end{tikzpicture}
+% \includegraphics[width=\columnwidth]{figures/top-classes.pdf}
+\caption{The 10 most frequent classes in \ourkb, which make up 25\% of all entities.}
+\label{fig:frequent_classes}
+\end{figure}
+
+
+\subsection{Properties} The most frequent properties in the whole KB are \textit{instanceOf} (3.1M) and \textit{features} (2M) with similarly generic properties following at the entity level. At the class level, we find more specific properties, for instance, the most frequent properties in the class \textit{Person} are \textit{instanceOf} (309K), \textit{occupation} (198K), \textit{knownFor} (179K), \textit{exhibition} (178K).
+
+
+
+
+
+\subsection{Content bias} 
+We also analyze the geographic bias of our KB, using the listed nationalities as proxy. 
+% The results are shown in Figure~\ref{fig:nationalities}.
+We 
+% can 
+observe a clear bias towards English-language nationalities: 
+the top-2 are
+American (119K) and
+British (35K),
+while the next 3 are French (18K), German (14K), and Japanese (11K).
+This bias in \ourkb{} 
+is stronger than, e.g., in Wikidata \cite{shaik2021analyzing}, and a curious lack of others (e.g., Chinese only 3K, compared to 8K for Russian, or 7K for Indian/Spanish), likely reflecting the (undisclosed) English-centric training corpus of GPT-4o-mini. 
+
+An interesting point is also gender bias: The \textit{gender} property of \ourkb{} contains 15K female versus 8K male values. For first names, male ones are still more than female (47\% vs. 37\% based on the \textit{gender-guesser 0.4.0} Python library), but this is still a much lower bias than in other KBs, likely reflecting the effects of gender debiasing. 
+
+
+
+
+\subsection{Wikidata overlap and novelty}
+We compare with Wikidata on several aspects: \textbf{First}, we compute the fraction of subjects that exist in Wikidata. From a random sample of 2,000 subjects from \ourkb, 24\% have an entity with exactly matching label in Wikidata. A further 6.5\% have a non-empty search result, i.e., an entity of paraphrased or similar label. The remaining 69.5\% appear novel.  %\sgmargin{YH: Is this based on 200 samples, or more?}
+\textbf{Second}, we exemplarily look at the 41 triples for \textit{Vannevar Bush}, of which we find that more than 10 are not contained in Wikidata, e.g., his affiliation with the US government, his children count (incorrect by 1), or him inventing the concept of hypertext.\footnote{An exact comparison is not straightforward, because relation names do not perfectly align, and objects in \ourkb\ are substantially more wordy.} \textbf{Third}, we identify several properties not modelled at all in Wikidata, for instance, \textit{historicalSignificance} (396K triples), \textit{artStyle} (174K triples), or \textit{hobbies} (44K triples). 
+This indicates that \ourkb\ potentially contains a significant amount of novel knowledge. A more comprehensive KB comparison in the style of \cite{farber2018linked} is planned.
+
+
+
+
+
+\chapter{Discussion}
+
+\section{Lessons for LLM epistemiology}
+\label{epistemiology}
+
+\subsection{Terminological observations}
+The notion and definition of LLM knowledge itself is controversial \cite{fierro2024defining}. We adopt here the term \textit{knowledge base} because it is common in the field, but would consider the term \textit{belief base} equally appropriate. In terms of the definitions of knowledge that are introduced by \citet{fierro2024defining}, we find that our output falls into the minimalistic sui-generis (g-knowledge) category, as our KB contains false as well as inconsistent triples. Beyond the reported errors, e.g., in many cases, spouse relations are not symmetrically represented. 
+
+\subsection{Storage capacity}
+Scaling laws and storage capacity are intensively investigated \cite{allen2024physics}, but usually on synthetic data. Our experiments provide a lower bound on real data: As discussed in Section \ref{sec:implementation}, GPT-4o-mini likely has in the order of 8B parameters. Given the 101M triples that we obtained, that makes \textit{79 parameters per triple}.\footnote{From \cite{allen2024physics}, a theoretical lower bound of 4 parameters/triple can be deduced, based on Remark 4.4, and their synthetic dataset containing 6 triples per entity. However, the generalizability of results on that synthetic dataset is unclear.} We emphasize that this number captures only encyclopedic knowledge, yet that LLMs also possess other knowledge, e.g., linguistic knowledge, procedural knowledge. 
+
+
+
+\subsection{Complementarity} We observe a high complementarity to existing resources, with 63\% 
+of generated entities not being present in Wikidata. Particularly, from Figure \ref{fig:accuracy}, \ourkb's entities remain web-verifiable even in deeper layers, about 70\% of the entities are web-verifiable in layer 10, even though the percentage of entities found in Wikidata drops to a little over 20\%.
+Apart from named-entities, some particularly noteworthy complementary slices of LLM knowledge concern digital media artifacts, art periods, and people's hobbies.
+
+\subsection{Accuracy}
+While on the entity level, most entities appear to truly exist (74\% verifiable, 9\% plausible), on the triple level, results are lower (31\% verifiable, 61\% plausible). This indicates that the LLM generally has a grasp of entities, but has more difficulties in correctly modeling their relationships. BFS-depth and quality are negatively correlated, but there is no complete quality collapse within the first 10 levels. 
+
+\subsection{Enabled analyses}
+Our materialized resource enables a range of analyses about factual LLM knowledge, which for space reasons we only skim here:  \textbf{1) Accuracy}: See Sec.~\ref{sec:precision} and paragraph above. \textbf{2) LLM bias}: See Sec.~\ref{sec:content-and-comparison}. 
+\textbf{3) Timeliness}: Exemplarily, we collect the most frequently mentioned years, and observe that there is sharp drop after 2023, which matches the knowledge cutoff of the LLM (see plot in Appendix~\ref{app:years}).
+\textbf{4) Subject-wise consistency:} Our KB still contains many duplicates, e.g., \textit{The Elbe River, River Elbe, Elbe River, river Elbe, Elbe}. Studying their triples gives insights into consistency, e.g., we observe a significant semantic overlap, but also frequent different wordings (e.g., \textit{wildlife - various fish species / fish species}), and minor factual deviations (e.g., length 3x 1094km, 2x 1091km).
+\textbf{5) Structural consistency:} An interesting observation concerns the difficulty that LLMs have with inverse relations \cite{reversalcurse}. We can observe this too, for instance, out of 318K \textit{spouse} triples, only 8K are symmetric, and out of 61K \textit{parentCompany} triples, only 6K are mirrored in \textit{subsidiary} triples.
+
+
+\section{Lessons for KB construction}
+
+The \ourkb\ prototype reveals several important lessons for LLM-based KB construction. In particular, we find it notable that building such a large KB was possible so quickly, with a relatively small model.
+
+\subsection{Precision-recall trade-off} The biggest challenge in our view is precision, both in terms of hallucinated entities, and triples. We do not expect that larger models alone will solve this problem, because the long tail, where hallucinations occur, would likely just be pushed farther, but remain difficult to delineate. Tuning the precision-recall tradeoff, for example, via more conservative prompts, or via thresholding based on elicited confidence values \cite{xiongcan}, might be a way forward.
+
+\subsection{Emerging entities} Some applications are especially interested in newly emerging entities, and these are a long-standing challenge for traditional KBC \cite{knowledge-awakens}. Web-scraped KBs like Yago and DBpedia could in principle re-run their scrapers periodically, while text-extracted KBs like Nell and ReVerb would require re-runs on new web crawls. Our approach could proceed analogous, re-running the materialization on a newer version of the utilized LLM. If one were to know which entities are affected by updates, one could also perform retrieval-augmented generation, however, knowing where updates occured essentially requires an oracle, and none of the existing KBs successfully employed selective updating.
+
+\subsection{Consolidation challenges} Our exploration surfaced a potpourri of other challenges, some of them known to KB construction research since years \cite{machine-knowledge}, others requiring novel adaptations in the light of LLMs. These concern (1) NER for short labels without context, (2) entity deduplication, (3) entity canonicalization, (4) literal typing and canonicalization, (5) relation clustering, (6) relation organization in terms of subrelations, (7) class clustering, (8) taxonomy construction, and (9) triple verification. While we explored simple techniques for 1, 2, 5, 7, 8, each has room upward, and other tasks were not treated so far.
+
+\subsection{Cost-effectiveness} The \ourkb\ approach deviates from traditional Wikimedia- and data-integration focused KB construction, and although its precision still needs improvement, it stands out with its potential for cost efficiency. In a back-of-the-envelope calculation,
+\citet{paulheim2018much} estimated the cost per triple for existing manual KB construction projects at \$2-6, and for existing automated KB construction projects at \$0.01-0.15. In contrast, in our prototypical execution, the cost is just \$0.0001 per correct triple (\$3.5K/33M), i.e., $>$100x less than with previous methods.
+% \textcolor{red}{Update this!!!}
+
+
+\section{Other LLMs}
+We performed a parallel exploration using Llama-3.1-70B-Instruct on local HPC hardware, and while accuracy is higher (69\% of triples verified true in a test run), this did not scale. We also envisioned a run using the strongest publicly available LLM, GPT-4o (80\% triples verified true), however, by its 15x higher API cost, and its estimated 25x larger parameter set, assuming knowledge is roughly proportional to parameters, at about \$825K, this is beyond our budget. See Appendix~\ref{sec:llm-comparison}.
+
+
+\chapter{Conclusion}
+
+
+Our work is a landmark for two fields: For NLP, for the first time, it provides comprehensive insights into what LLMs know (or believe). For the Semantic Web, it shows novel ways forward for the long stale topic of open-domain KB construction. \ourkb\ is accessible at \website.
+% \textcolor{red}{Update this!!!}
+
+
+\chapter{Limitations}
+\label{sec:limitations}
+
+
+As already observed by \citet{petroni-etal-2019-language}, prompt formulations heavily influence LLM responses, and hence may bias the resulting KB. \ourkb\ presents one way of materializing LLM knowledge into structured format, but different prompts could give different output. It is also important to observe that LLMs operate inherently probabilistically, while our output (and most web-scale KBs) are binary. Any process translating from probabilistic to binary implicitly encodes a choice between precision and recall, and we do so by the triple counts given as guidance in the elicitation prompt. 
+In our view, such a biasing is hard to avoid, and also not solved by instruction-free sample-only (few-shot) prompts as proposed by \citet{wu2024towards}, as also examples bias the responses, both in terms of quantity, topics, and vocabulary.
+
+Our exemplary run presents a proof of concept for materializing LLM knowledge. While this knowledge has slices complementary to existing KB knowledge, so far our experiments on verifiability does not satisfy the precision requirements of most downstream use cases, nor is its precision even accurately established, because it contains many long-tail triples without web sources that enable confirming or refuting their truth. The knowledge in our KB can intrinsically not be sourced back to any specific document and contributor. Also, as we do not prescribe any standardized vocabulary, and only apply lightweight consolidation, our KB does not yet possess the consistency of existing projects.
+If you consider using a KB in production, for the time being, consider an alternative like Wikidata.
+
+
+Our materialized KB is based on a closed-source LLM that also does not come with guarantees regarding persistent servicing. In the past, similar models have been discontinued, hence, long-term reproducibility is not guaranteed. An execution based on an open model is planned.
+
+
+
+\bibliographystyle{acl_natbib}
+\bibliography{custom}
+
+
+
+\appendix
+
+\chapter{Further KB Content}
+
+Figures \ref{tab:vienna} and \ref{tab:jorgecham} provide further examples of \ourkb{} content. In the first case, all triples appear correct, but the predicate \textit{famousFor} dominates the entity. In second case, most triples are correct, but the spouse is made up. In the online OpenReview appendix to this submission, we provide a larger sample of 10K triples.
+
+\begin{figure}[ht]
+\includegraphics[width=\columnwidth]{figures/vienna.png}
+\caption{Excerpt of \ourkb\ triples for subject \textit{Vienna}.}
+\label{tab:vienna}
+\end{figure}
+
+\begin{figure}[ht]
+\includegraphics[width=\columnwidth]{figures/jorgecham.png}
+\caption{Excerpt of \ourkb\ triples for subject \textit{Jorge Cham} of PhDComics.}
+\label{tab:jorgecham}
+\end{figure}
+
+
+\chapter{Class distribution by BFS-level}
+\label{app:layer-classes}
+
+Figure~\ref{fig:classes-by-bfs-level} shows the most frequent classes by BFS-level. As one can see, diversity increases towards lower BFS-levels, and some classes, like \textit{awards}, only emerge later.
+
+\begin{figure}[ht]
+ \centering
+  \includegraphics[width=1.05\columnwidth]{figures/classdistribution.pdf}
+ \caption{Most frequent classes by BFS-level. The root level (\#1) is excluded from the chart.}
+ \label{fig:classes-by-bfs-level}
+ \end{figure}
+
+
+\chapter{Prompts}
+\label{app:prompts}
+
+All prompts below are aided by OpenAI's structured output feature, which allows defining a specific JSON schema, that the output has to adhere to. Therefore, the description of the output format in the prompts is less expansive than what is common in many other works.
+
+Figure~\ref{fig:full-prompt} contains the prompt used for triple elicitation. 
+Figure~\ref{fig:prompt-ner} shows the prompt for NER. 
+Figure~\ref{fig:taxonomy} lists the prompt for taxonomy construction. 
+
+
+
+\begin{figure*}[ht]
+    \centering
+    \noindent
+    \fbox{\small 
+    \begin{minipage}{\textwidth}
+        You are a knowledge base construction expert. Given a subject entity, return all facts that you know for the subject as a list of subject, predicate, object triples. The number of facts may be very high, between 50 to 100 or more, for very popular subjects. For less popular subjects, the number of facts can be very low, like 5 or 10.\\
+\ \\
+Important: \\
+- If you don't know the subject, return an empty list. \\
+- If the subject is not a named entity, return an empty list.\\
+- If the subject is a named entity, include at least one triple where predicate is ``instanceOf''.\\
+- Do not get too wordy.\\
+- Separate several objects into multiple triples with one object.
+        \end{minipage}
+    }
+    \caption{Prompt for knowledge elicitation.}
+    \label{fig:full-prompt}
+\end{figure*}
+
+
+\begin{figure*}[ht]
+    \centering
+    \noindent
+    \fbox{\small 
+    \begin{minipage}{\textwidth}
+You are an expert on named entity recognition (NER). Your task is to classify if given phrases are named entities (e.g., persons, organizations, works of art), or not (e.g., literals, dates, URLs, verbose phrases). Each phrase is given to you in a line.
+        \end{minipage}
+    }
+    \caption{Prompt for named-entity recognition (NER).}
+    \label{fig:prompt-ner}
+\end{figure*}
+
+
+\begin{figure*}[ht]
+    \centering
+    \noindent
+    \fbox{\small 
+    \begin{minipage}{\textwidth}
+        You are a knowledge base construction expert. 
+        Your task is to initialize a seed taxonomy with general categories, which you will update later with given classes.
+        Please return only the seed taxonomy in json form with indentation.
+    \end{minipage}
+    }
+    \fbox{\small 
+    \begin{minipage}{\textwidth}
+        Class: <new class>\\
+        \ \\
+        You are a knowledge base construction expert.
+        Your task is to create a taxonomy for a knowledge base.
+        Beforehand, you need to give each given class a score describing how general it is.
+        The score is an integer ranging only from 1, for the most general concept, to 10, for the most specific concept.
+        Please return only the score of the given class.
+    \end{minipage}
+    }
+    \fbox{\small 
+    \begin{minipage}{\textwidth}
+        Candidate branches: <branches of current node>\\
+        Class: <class to add>\\
+        \ \\
+        You are a knowledge base construction expert.
+        Your task is to integrate a given class into the taxonomy.
+        If the given class is a subclass of one of the candidate branches, return only the exact name of that branch.
+        Otherwise, return only NULL.  
+    \end{minipage}
+    }
+    \fbox{\small 
+    \begin{minipage}{\textwidth}
+        Taxonomy: <taxonomy from current node>\\
+        Class: <class to add>\\
+        \ \\
+        You are a knowledge base construction expert.
+        Your task is to update the given taxonomy with the given class.
+        You can consider the categorization of the taxonomy, but you can not modify the names of the classes in the taxonomy.
+        Please return only the updated taxonomy in JSON form.
+    \end{minipage}
+    }
+    \caption{Prompts for seed taxonomy construction (top), class generality scoring (upper middle), recursive class insertion check (lower middle), and (sub)taxonomy update (bottom).}
+    \label{fig:taxonomy}
+\end{figure*}
+
+
+\chapter{Analysis of temporal cutoff}
+\label{app:years}
+
+In Figure~\ref{fig:years}, we plot the frequency of values for the \textit{year} property. One can observe two things: 1) A steady increase of frequency with recency, likely mirroring the growth of web corpora over the years, which made more recent content overrepresented. 2) A sudden dropoff between 2023 (549 triples) and 2024 (75 triples), matching the self-declared knowledge cutoff of the GPT-4o-mini LLM. 
+
+\begin{figure}[H]
+\centering
+% \includegraphics[width=1.05\columnwidth]{figures/years.pdf}
+\resizebox{\columnwidth}{!}{%
+    \begin{tikzpicture}
+    \begin{axis}[
+        xlabel={Year},
+        ylabel={Count},
+        ymin=0, ymax=1000,
+        xmin=1970, xmax=2030,
+        xtick={1970,1980,1990,2000,2010,2020,2030},
+        xticklabel style={/pgf/number format/.cd,set thousands separator={}}, % Remove comma
+        ytick={0,250,500,750,1000},
+        grid=both,
+        width=10cm, height=6cm,
+    ]
+    \addplot[
+        ultra thick,
+        color=gg-blue,
+    ] coordinates {
+    (1970, 154) (1971, 88) (1972, 86) (1973, 63) (1974, 140) (1975, 88) (1976, 84) (1977, 50) (1978, 69) (1979, 68) (1980, 140) (1981, 67) (1982, 64) (1983, 73) (1984, 86) (1985, 92) (1986, 86) (1987, 76) (1988, 75) (1989, 93) (1990, 163) (1991, 107) (1992, 122) (1993, 119) (1994, 140) (1995, 140) (1996, 157) (1997, 157) (1998, 141) (1999, 143) (2000, 324) (2001, 246) (2002, 186) (2003, 181) (2004, 219) (2005, 266) (2006, 293) (2007, 247) (2008, 287) (2009, 268) (2010, 421) (2011, 308) (2012, 381) (2013, 381) (2014, 445) (2015, 549) (2016, 519) (2017, 434) (2018, 593) (2019, 624) (2020, 801) (2021, 917) (2022, 470) (2023, 549) (2024, 75) (2025, 37) (2026, 21) (2027, 22)
+    };
+    \end{axis}
+    \end{tikzpicture}
+}
+\caption{Number of triples for the \textit{year} property, per year. The sudden drop from 2023 to 2024 matches the self-declared 2023 knowledge cutoff of GPT-4o-mini.}
+\label{fig:years}
+\end{figure}
+
+
+\chapter{Comparison of LLMs}
+\label{sec:llm-comparison}
+
+In Table~\ref{tab:llm-comparison}, we compare GPT-4o-mini with GPT-4o and Llama 3.1 70B in terms of accuracy. All LLMs are evaluated on a similar-sized set of entities (20K). One can observe significant accuracy differences, consistent with the order of their (estimated) parameter size, and general benchmark results. 
+
+\begin{table}[H]
+\small
+\centering
+\begin{tabular}{@{}lrrr@{}}
+    \toprule
+     & \textbf{GPT} & \textbf{Llama} & \textbf{GPT} \\
+     & \textbf{4o-mini*} & \textbf{3.1 70B} & \textbf{4o} \\
+     \midrule
+    Web-verified triples & 0.38 & 0.69 & 0.78 \\
+    Entities on Wikidata & 0.78 & 0.83 & 0.88 \\
+    Web-verified entities & 0.80 & 0.95 & 0.98 \\ 
+    \bottomrule
+\end{tabular}
+\caption{Entity and triple verifiability comparison between different LLMs on a similar-sized set of entities. GPT-4o-mini* corresponds to the first 5 layers of what is reported in Figure~\ref{fig:accuracy}.}
+\label{tab:llm-comparison}
+\end{table}
+
+
+\chapter{Sources for KB comparison}
+\label{app:source-kb-sizes}
+Sources of KB sizes in the comparison presented in Table~\ref{tab:KB-sizes}:
+\textbf{Wikidata}: See \url{https://www.wikidata.org/wiki/Wikidata:Statistics} and \url{https://grafana.wikimedia.org/d/000000175/wikidata-datamodel-statements}.
+\textbf{Wikidata5m}: \cite{wang-etal-2021-kepler}. 
+\textbf{Yago4.5}: \cite{yago45}. 
+\textbf{DBpedia}: English version as per Table 2 in \cite{dbpedia-statistics}. 
+\textbf{NELL}: As per Figure 5 (left) in \cite{nell}. 
+\textbf{Reverb}: As per \cite{reverb-linked} and \url{https://web.archive.org/web/20220307185343/https://openie.allenai.org/}.
+
+
+\end{document}
